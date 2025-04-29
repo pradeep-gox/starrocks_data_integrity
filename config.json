@@ -1,0 +1,16 @@
+{
+  "source": {
+    "host": "127.0.0.1",
+    "port": 9030,
+    "user": "root",
+    "password": ""
+  },
+  "target": {
+    "host": "127.0.0.1",
+    "port": 9030,
+    "user": "root",
+    "password": ""
+  },
+  "databases": ["fins"],
+  "skipTables": []
+}

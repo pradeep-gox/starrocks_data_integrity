@@ -1,0 +1,11 @@
+{
+  "name": "starrocks_data_integrity",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "console-table-printer": "^2.12.1",
+    "mysql2": "^3.14.1",
+    "yargs": "^17.7.2"
+  }
+}
