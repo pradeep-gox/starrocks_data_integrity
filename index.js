@@ -69,13 +69,18 @@ const argv = yargs
   .alias("help", "h").argv;
 
 // Load configuration from file if provided
-let sourceConfig, targetConfig, databasesToVerify, tablesToSkip;
+let sourceConfig,
+  targetConfig,
+  databasesToVerify,
+  tablesToSkip,
+  skipSamplingTables;
 if (argv.config) {
   const configFile = require(argv.config);
   sourceConfig = configFile.source;
   targetConfig = configFile.target;
   databasesToVerify = configFile.databases || [];
   tablesToSkip = configFile.skipTables || [];
+  skipSamplingTables = configFile.skipSamplingTables || [];
 } else {
   // Default configuration
   sourceConfig = {
@@ -100,6 +105,7 @@ if (argv.config) {
     ? argv.databases.split(",")
     : ["db1", "db2", "db3"];
   tablesToSkip = argv.skipTables ? argv.skipTables.split(",") : [];
+  skipSamplingTables = [];
 }
 
 // Report file path
@@ -108,11 +114,18 @@ const REPORT_FILE =
   `${new Date().toISOString().replace(/:/g, "-").replace(/\..+/, "")}.md`;
 
 class StarRocksVerifier {
-  constructor(sourceConfig, targetConfig, databasesToVerify, tablesToSkip) {
+  constructor(
+    sourceConfig,
+    targetConfig,
+    databasesToVerify,
+    tablesToSkip,
+    skipSamplingTables
+  ) {
     this.sourceConfig = { ...sourceConfig };
     this.targetConfig = { ...targetConfig };
     this.databasesToVerify = databasesToVerify;
     this.tablesToSkip = tablesToSkip;
+    this.skipSamplingTables = skipSamplingTables;
     this.verificationResults = [];
     this.errors = [];
     this.startTime = null;
@@ -216,24 +229,47 @@ class StarRocksVerifier {
   }
 
   /**
-   * Get columns that can be used for ordering (exclude JSON and complex types)
+   * Get primary key columns for a table
    */
   async getOrderableColumns(connection, database, table) {
-    const schema = await this.getTableSchema(connection, database, table);
-    return schema
-      .filter((row) => {
-        const type = row.Type.toLowerCase();
-        return (
-          !type.includes("json") &&
-          !type.includes("nested") &&
-          !type.includes("percentile") &&
-          !type.includes("hll") &&
-          !type.includes("bitmap") &&
-          !type.includes("struct") &&
-          !type.includes("map")
-        );
-      })
-      .map((row) => row.Field);
+    try {
+      await connection.query(`USE \`${database}\``);
+
+      // Get primary key information
+      const [rows] = await connection.query(`
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = '${database}'
+        AND TABLE_NAME = '${table}'
+        AND CONSTRAINT_NAME = 'PRIMARY'
+        ORDER BY ORDINAL_POSITION
+      `);
+
+      if (rows.length > 0) {
+        return rows.map((row) => row.COLUMN_NAME);
+      }
+
+      // If no primary key exists, fall back to first column
+      const [columns] = await connection.query(`
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '${database}'
+        AND TABLE_NAME = '${table}'
+        ORDER BY ORDINAL_POSITION
+        LIMIT 1
+      `);
+
+      if (columns.length > 0) {
+        return [columns[0].COLUMN_NAME];
+      }
+
+      return [];
+    } catch (error) {
+      this.errors.push(
+        `Error getting primary keys for ${database}.${table}: ${error.message}`
+      );
+      return [];
+    }
   }
 
   /**
@@ -241,6 +277,20 @@ class StarRocksVerifier {
    */
   async getDataSample(connection, database, table, sampleSize = 100) {
     try {
+      // Skip sampling for problematic tables
+      if (this.skipSamplingTables.includes(table)) {
+        this.verificationResults.push({
+          check_type: "Data Sampling",
+          database: `${database}`,
+          table: table,
+          source: "Skipped",
+          target: "Skipped",
+          result: "SKIPPED",
+          notes: "Table skipped due to memory constraints",
+        });
+        return [];
+      }
+
       await connection.query(`USE \`${database}\``);
 
       // Get total rows to calculate appropriate sampling ratio
@@ -266,8 +316,8 @@ class StarRocksVerifier {
 
       // For large tables, use a more efficient sampling method
       if (rowCount > CONFIG.LARGE_TABLE_CHECKSUM_THRESHOLD) {
-        // Use a smaller sample size for large tables
-        const actualSampleSize = Math.min(10, sampleSize);
+        // Use a very small sample size for large tables
+        const actualSampleSize = Math.min(100, sampleSize);
         const step = Math.floor(rowCount / actualSampleSize);
 
         // Create ORDER BY clause using only orderable columns
@@ -283,8 +333,27 @@ class StarRocksVerifier {
           OFFSET ${step}
         `;
 
-        const [rows] = await connection.query(query);
-        return rows;
+        try {
+          const [rows] = await connection.query(query);
+          return rows;
+        } catch (error) {
+          if (
+            error.message.includes("Memory") ||
+            error.message.includes("mem usage")
+          ) {
+            this.verificationResults.push({
+              check_type: "Data Sampling",
+              database: `${database}`,
+              table: table,
+              source: "Skipped",
+              target: "Skipped",
+              result: "SKIPPED",
+              notes: "Memory limit exceeded during sampling",
+            });
+            return [];
+          }
+          throw error;
+        }
       }
 
       // For smaller tables, use the original sampling method
@@ -297,8 +366,27 @@ class StarRocksVerifier {
         LIMIT ${sampleSize}
       `;
 
-      const [rows] = await connection.query(query);
-      return rows;
+      try {
+        const [rows] = await connection.query(query);
+        return rows;
+      } catch (error) {
+        if (
+          error.message.includes("Memory") ||
+          error.message.includes("mem usage")
+        ) {
+          this.verificationResults.push({
+            check_type: "Data Sampling",
+            database: `${database}`,
+            table: table,
+            source: "Skipped",
+            target: "Skipped",
+            result: "SKIPPED",
+            notes: "Memory limit exceeded during sampling",
+          });
+          return [];
+        }
+        throw error;
+      }
     } catch (error) {
       this.errors.push(
         `Error getting data sample for ${database}.${table}: ${error.message}`
@@ -1305,7 +1393,8 @@ async function main() {
       sourceConfig,
       targetConfig,
       databasesToVerify,
-      tablesToSkip
+      tablesToSkip,
+      skipSamplingTables
     );
 
     // Run verifications

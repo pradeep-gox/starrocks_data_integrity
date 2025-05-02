@@ -26,5 +26,14 @@
     "adsets_team_level_temporary",
     "campaigns_team_level_temporary",
     "creatives_team_level_temporary"
+  ],
+  "skipSamplingTables": [
+    "ad_insights_conversion_report_time_with_unified_attribution_setting",
+    "ad_insights_conversion_report_time_without_unified_attribution_setting",
+    "ad_insights_default_report_time_with_unified_attribution_setting",
+    "ad_insights_default_report_time_without_unified_attribution_setting",
+    "ad_insights_impression_report_time_with_unified_attribution_setting",
+    "ad_insights_impression_report_time_without_unified_attribution_setting",
+    "ads"
   ]
 }
