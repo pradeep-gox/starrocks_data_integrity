@@ -235,161 +235,65 @@ class StarRocksVerifier {
     try {
       await connection.query(`USE \`${database}\``);
 
-      // Get primary key information
-      const [rows] = await connection.query(`
-        SELECT COLUMN_NAME
-        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-        WHERE TABLE_SCHEMA = '${database}'
-        AND TABLE_NAME = '${table}'
-        AND CONSTRAINT_NAME = 'PRIMARY'
-        ORDER BY ORDINAL_POSITION
+      // For StarRocks, we need to parse the CREATE TABLE statement to get primary key
+      const [createTableRows] = await connection.query(`
+        SHOW CREATE TABLE \`${table}\`
       `);
 
-      if (rows.length > 0) {
-        return rows.map((row) => row.COLUMN_NAME);
+      if (createTableRows && createTableRows.length > 0) {
+        const createTableStmt = createTableRows[0]["Create Table"];
+
+        // Extract primary key definition
+        const pkMatch = createTableStmt.match(/PRIMARY KEY\s*\(([^)]+)\)/i);
+        if (pkMatch) {
+          // Split the primary key columns and clean them up
+          const pkColumns = pkMatch[1]
+            .split(",")
+            .map((col) => col.trim().replace(/`/g, ""));
+          return pkColumns;
+        }
+
+        // Try to find UNIQUE KEY definition
+        const uniqueMatch = createTableStmt.match(/UNIQUE KEY\s*\(([^)]+)\)/i);
+        if (uniqueMatch) {
+          // Split the unique key columns and clean them up
+          const uniqueColumns = uniqueMatch[1]
+            .split(",")
+            .map((col) => col.trim().replace(/`/g, ""));
+          return uniqueColumns;
+        }
       }
 
-      // If no primary key exists, fall back to first column
+      // If no primary or unique key found, try to get distributed key
+      const distributedMatch = createTableStmt.match(
+        /DISTRIBUTED BY HASH\s*\(([^)]+)\)/i
+      );
+      if (distributedMatch) {
+        // Split the distributed key columns and clean them up
+        const distributedColumns = distributedMatch[1]
+          .split(",")
+          .map((col) => col.trim().replace(/`/g, ""));
+        return distributedColumns;
+      }
+
+      // If no keys found, get all columns and use the first one
       const [columns] = await connection.query(`
         SELECT COLUMN_NAME
         FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = '${database}'
         AND TABLE_NAME = '${table}'
         ORDER BY ORDINAL_POSITION
-        LIMIT 1
       `);
 
-      if (columns.length > 0) {
+      if (columns && columns.length > 0) {
         return [columns[0].COLUMN_NAME];
       }
 
+      this.errors.push(`No orderable columns found for ${database}.${table}`);
       return [];
     } catch (error) {
       this.errors.push(
-        `Error getting primary keys for ${database}.${table}: ${error.message}`
-      );
-      return [];
-    }
-  }
-
-  /**
-   * Get a sample of data from the table with memory optimization
-   */
-  async getDataSample(connection, database, table, sampleSize = 100) {
-    try {
-      // Skip sampling for problematic tables
-      if (this.skipSamplingTables.includes(table)) {
-        this.verificationResults.push({
-          check_type: "Data Sampling",
-          database: `${database}`,
-          table: table,
-          source: "Skipped",
-          target: "Skipped",
-          result: "SKIPPED",
-          notes: "Table skipped due to memory constraints",
-        });
-        return [];
-      }
-
-      await connection.query(`USE \`${database}\``);
-
-      // Get total rows to calculate appropriate sampling ratio
-      const rowCount = await this.getRowCount(connection, database, table);
-
-      if (rowCount === 0) {
-        return [];
-      }
-
-      // Get orderable columns
-      const orderableColumns = await this.getOrderableColumns(
-        connection,
-        database,
-        table
-      );
-
-      if (orderableColumns.length === 0) {
-        this.errors.push(
-          `No orderable columns found for ${database}.${table}, skipping data sample`
-        );
-        return [];
-      }
-
-      // For large tables, use a more efficient sampling method
-      if (rowCount > CONFIG.LARGE_TABLE_CHECKSUM_THRESHOLD) {
-        // Use a very small sample size for large tables
-        const actualSampleSize = Math.min(100, sampleSize);
-        const step = Math.floor(rowCount / actualSampleSize);
-
-        // Create ORDER BY clause using only orderable columns
-        const orderByClause = orderableColumns
-          .map((col) => `\`${col}\``)
-          .join(", ");
-
-        // Use a more memory-efficient query with LIMIT and OFFSET
-        const query = `
-          SELECT * FROM \`${table}\`
-          ORDER BY ${orderByClause}
-          LIMIT ${actualSampleSize}
-          OFFSET ${step}
-        `;
-
-        try {
-          const [rows] = await connection.query(query);
-          return rows;
-        } catch (error) {
-          if (
-            error.message.includes("Memory") ||
-            error.message.includes("mem usage")
-          ) {
-            this.verificationResults.push({
-              check_type: "Data Sampling",
-              database: `${database}`,
-              table: table,
-              source: "Skipped",
-              target: "Skipped",
-              result: "SKIPPED",
-              notes: "Memory limit exceeded during sampling",
-            });
-            return [];
-          }
-          throw error;
-        }
-      }
-
-      // For smaller tables, use the original sampling method
-      const orderByClause = orderableColumns
-        .map((col) => `\`${col}\``)
-        .join(", ");
-      const query = `
-        SELECT * FROM \`${table}\`
-        ORDER BY ${orderByClause}
-        LIMIT ${sampleSize}
-      `;
-
-      try {
-        const [rows] = await connection.query(query);
-        return rows;
-      } catch (error) {
-        if (
-          error.message.includes("Memory") ||
-          error.message.includes("mem usage")
-        ) {
-          this.verificationResults.push({
-            check_type: "Data Sampling",
-            database: `${database}`,
-            table: table,
-            source: "Skipped",
-            target: "Skipped",
-            result: "SKIPPED",
-            notes: "Memory limit exceeded during sampling",
-          });
-          return [];
-        }
-        throw error;
-      }
-    } catch (error) {
-      this.errors.push(
-        `Error getting data sample for ${database}.${table}: ${error.message}`
+        `Error getting orderable columns for ${database}.${table}: ${error.message}`
       );
       return [];
     }
@@ -456,26 +360,29 @@ class StarRocksVerifier {
       return "EMPTY";
     }
 
-    // Use a deterministic sampling method
-    const sampleRatio = Math.min(10, (1000000 / rowCount) * 100); // Sample at most 10% or enough to get 1M rows
-
     // Create ORDER BY clause using only orderable columns
     const orderByClause = orderableColumns
       .map((col) => `\`${col}\``)
       .join(", ");
 
-    // Create a more robust checksum query that handles NULLs and type conversions
+    // Use a simple sampling method with fixed intervals and consistent ordering
     const query = `
+      WITH ordered_rows AS (
+        SELECT 
+          ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+          ${columns.map((col) => `\`${col}\``).join(", ")}
+        FROM \`${table}\`
+        ORDER BY ${orderByClause}
+      )
       SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
       FROM (
         SELECT 
-          ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+          row_num,
           MD5(CONCAT_WS('|', ${columns
             .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
             .join(", ")})) as row_hash
-        FROM \`${table}\`
-        ORDER BY ${orderByClause}
-        LIMIT ${Math.floor(rowCount * (sampleRatio / 100))}
+        FROM ordered_rows
+        WHERE MOD(row_num, GREATEST(1, FLOOR(${rowCount} / 1000))) = 0
       ) t
     `;
 
@@ -514,131 +421,33 @@ class StarRocksVerifier {
       .join(", ");
 
     const query = `
+      WITH ordered_rows AS (
+        SELECT 
+          ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+          ${columns.map((col) => `\`${col}\``).join(", ")}
+        FROM \`${table}\`
+        ORDER BY ${orderByClause}
+      )
       SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
       FROM (
         SELECT 
-          ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+          row_num,
           MD5(CONCAT_WS('|', ${columns
-            .map((col) => `IFNULL(CAST(\`${col}\` AS STRING), 'NULL')`)
+            .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
             .join(", ")})) as row_hash
-        FROM \`${table}\`
-        ORDER BY ${orderByClause}
+        FROM ordered_rows
       ) t
     `;
 
-    const [rows] = await connection.query(query);
-    return rows[0].checksum || "N/A";
-  }
-
-  /**
-   * Compare values based on their data type
-   */
-  compareValues(sourceVal, targetVal, columnType) {
-    if (sourceVal === null && targetVal === null) return true;
-    if (sourceVal === null || targetVal === null) return false;
-
-    // Convert both values to strings for comparison
-    const sourceStr = String(sourceVal).trim();
-    const targetStr = String(targetVal).trim();
-
-    // Handle numeric types
-    if (/int|float|double|decimal|numeric/i.test(columnType)) {
-      const sourceNum = parseFloat(sourceStr);
-      const targetNum = parseFloat(targetStr);
-
-      if (isNaN(sourceNum) || isNaN(targetNum)) {
-        return sourceStr === targetStr;
-      }
-
-      if (sourceNum === 0) {
-        return Math.abs(targetNum) < CONFIG.FLOAT_COMPARISON_TOLERANCE;
-      }
-
-      const relDiff = Math.abs((sourceNum - targetNum) / sourceNum);
-      return relDiff <= CONFIG.FLOAT_COMPARISON_TOLERANCE;
-    }
-
-    // Handle date/time types
-    if (/date|time|timestamp/i.test(columnType)) {
-      const sourceDate = new Date(sourceStr);
-      const targetDate = new Date(targetStr);
-      return (
-        !isNaN(sourceDate.getTime()) &&
-        !isNaN(targetDate.getTime()) &&
-        sourceDate.getTime() === targetDate.getTime()
+    try {
+      const [rows] = await connection.query(query);
+      return rows[0].checksum || "N/A";
+    } catch (error) {
+      this.errors.push(
+        `Error computing checksum for ${database}.${table}: ${error.message}`
       );
+      return "ERROR";
     }
-
-    // Default to string comparison
-    return sourceStr === targetStr;
-  }
-
-  /**
-   * Compare data samples with type-aware comparison
-   */
-  compareDataSamples(sourceSample, targetSample, schema) {
-    if (!sourceSample.length || !targetSample.length) {
-      return false;
-    }
-
-    // Ensure both samples have the same columns
-    const sourceColumns = Object.keys(sourceSample[0]);
-    const targetColumns = Object.keys(targetSample[0]);
-    const commonColumns = sourceColumns
-      .filter((col) => targetColumns.includes(col))
-      .sort();
-
-    if (!commonColumns.length) {
-      return false;
-    }
-
-    // Simple count check
-    if (sourceSample.length !== targetSample.length) {
-      return false;
-    }
-
-    // Sort both data sets by common columns
-    const sortedSource = [...sourceSample].sort((a, b) => {
-      for (const col of commonColumns) {
-        const aVal = String(a[col] || "").trim();
-        const bVal = String(b[col] || "").trim();
-        if (aVal < bVal) return -1;
-        if (aVal > bVal) return 1;
-      }
-      return 0;
-    });
-
-    const sortedTarget = [...targetSample].sort((a, b) => {
-      for (const col of commonColumns) {
-        const aVal = String(a[col] || "").trim();
-        const bVal = String(b[col] || "").trim();
-        if (aVal < bVal) return -1;
-        if (aVal > bVal) return 1;
-      }
-      return 0;
-    });
-
-    // Compare each row with type awareness
-    for (let i = 0; i < sortedSource.length; i++) {
-      const sourceRow = sortedSource[i];
-      const targetRow = sortedTarget[i];
-
-      for (const col of commonColumns) {
-        const columnType =
-          schema.find((field) => field.Field === col)?.Type || "string";
-        if (!this.compareValues(sourceRow[col], targetRow[col], columnType)) {
-          // Log the difference for debugging
-          console.log(`Difference found in ${col}:`, {
-            source: sourceRow[col],
-            target: targetRow[col],
-            type: columnType,
-          });
-          return false;
-        }
-      }
-    }
-
-    return true;
   }
 
   /**
@@ -1121,87 +930,6 @@ class StarRocksVerifier {
   }
 
   /**
-   * Verify random data samples from tables
-   */
-  async verifyDataSamples() {
-    console.log("Verifying data samples...");
-
-    for (const dbMapping of this.databasesToVerify) {
-      const sourceDb = dbMapping.source;
-      const targetDb = dbMapping.target;
-
-      const sourceConn = await this.sourceConn;
-      const targetConn = await this.targetConn;
-
-      try {
-        const sourceTables = await this.getTables(sourceConn, sourceDb);
-
-        for (const table of sourceTables) {
-          if (this.tablesToSkip.includes(table)) {
-            continue;
-          }
-
-          // Skip tables with too many rows for efficient sampling
-          const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
-          if (rowCount === 0) {
-            this.verificationResults.push({
-              check_type: "Data Sampling",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: "Empty table",
-              target: "Empty table",
-              result: "SKIPPED",
-              notes: "Table is empty",
-            });
-            continue;
-          }
-
-          const sourceSample = await this.getDataSample(
-            sourceConn,
-            sourceDb,
-            table,
-            CONFIG.SAMPLE_SIZE
-          );
-          const targetSample = await this.getDataSample(
-            targetConn,
-            targetDb,
-            table,
-            CONFIG.SAMPLE_SIZE
-          );
-
-          if (
-            this.compareDataSamples(
-              sourceSample,
-              targetSample,
-              await this.getTableSchema(sourceConn, sourceDb, table)
-            )
-          ) {
-            this.verificationResults.push({
-              check_type: "Data Sampling",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: `${sourceSample.length} samples`,
-              target: `${targetSample.length} samples`,
-              result: "PASSED",
-            });
-          } else {
-            this.verificationResults.push({
-              check_type: "Data Sampling",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: `${sourceSample.length} samples`,
-              target: `${targetSample.length} samples`,
-              result: "FAILED",
-            });
-          }
-        }
-      } finally {
-        await this.closeConnections();
-      }
-    }
-  }
-
-  /**
    * Format a value for display in the report
    */
   formatValue(value) {
@@ -1390,9 +1118,6 @@ class StarRocksVerifier {
 
       this.logProgress("Verifying column statistics");
       await this.verifyColumnStatistics();
-
-      this.logProgress("Verifying data samples");
-      await this.verifyDataSamples();
 
       this.endTime = new Date();
       const duration = (this.endTime - this.startTime) / 1000;
