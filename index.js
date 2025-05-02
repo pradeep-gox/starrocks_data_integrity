@@ -103,10 +103,9 @@ if (argv.config) {
 }
 
 // Report file path
-const REPORT_FILE = `starrocks_migration_verification_${new Date()
-  .toISOString()
-  .replace(/:/g, "-")
-  .replace(/\..+/, "")}.md`;
+const REPORT_FILE =
+  "results/" +
+  `${new Date().toISOString().replace(/:/g, "-").replace(/\..+/, "")}.md`;
 
 class StarRocksVerifier {
   constructor(sourceConfig, targetConfig, databasesToVerify, tablesToSkip) {
@@ -567,20 +566,23 @@ class StarRocksVerifier {
       const sourceDbs = await this.getDatabases(sourceConn);
       const targetDbs = await this.getDatabases(targetConn);
 
-      for (const db of this.databasesToVerify) {
-        if (!sourceDbs.includes(db)) {
+      for (const dbMapping of this.databasesToVerify) {
+        const sourceDb = dbMapping.source;
+        const targetDb = dbMapping.target;
+
+        if (!sourceDbs.includes(sourceDb)) {
           this.verificationResults.push({
             check_type: "Database Existence",
-            database: db,
+            database: `${sourceDb} -> ${targetDb}`,
             table: "N/A",
             source: "Missing",
             target: "N/A",
             result: "FAILED",
           });
-        } else if (!targetDbs.includes(db)) {
+        } else if (!targetDbs.includes(targetDb)) {
           this.verificationResults.push({
             check_type: "Database Existence",
-            database: db,
+            database: `${sourceDb} -> ${targetDb}`,
             table: "N/A",
             source: "Present",
             target: "Missing",
@@ -589,7 +591,7 @@ class StarRocksVerifier {
         } else {
           this.verificationResults.push({
             check_type: "Database Existence",
-            database: db,
+            database: `${sourceDb} -> ${targetDb}`,
             table: "N/A",
             source: "Present",
             target: "Present",
@@ -608,23 +610,23 @@ class StarRocksVerifier {
   async verifyTableExistence() {
     console.log("Verifying table existence...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
-        const targetTables = await this.getTables(targetConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
+        const targetTables = await this.getTables(targetConn, targetDb);
 
         // Check if all source tables exist in target
         for (const table of sourceTables) {
           if (!targetTables.includes(table)) {
             this.verificationResults.push({
               check_type: "Table Existence",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: "Present",
               target: "Missing",
@@ -633,7 +635,7 @@ class StarRocksVerifier {
           } else {
             this.verificationResults.push({
               check_type: "Table Existence",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: "Present",
               target: "Present",
@@ -653,28 +655,36 @@ class StarRocksVerifier {
   async verifyRowCounts() {
     console.log("Verifying row counts...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
 
         for (const table of sourceTables) {
           if (this.tablesToSkip.includes(table)) {
             continue;
           }
 
-          const sourceCount = await this.getRowCount(sourceConn, db, table);
-          const targetCount = await this.getRowCount(targetConn, db, table);
+          const sourceCount = await this.getRowCount(
+            sourceConn,
+            sourceDb,
+            table
+          );
+          const targetCount = await this.getRowCount(
+            targetConn,
+            targetDb,
+            table
+          );
 
           if (sourceCount === targetCount) {
             this.verificationResults.push({
               check_type: "Row Count",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: sourceCount,
               target: targetCount,
@@ -683,7 +693,7 @@ class StarRocksVerifier {
           } else {
             this.verificationResults.push({
               check_type: "Row Count",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: sourceCount,
               target: targetCount,
@@ -703,23 +713,31 @@ class StarRocksVerifier {
   async verifyTableSchemas() {
     console.log("Verifying table schemas...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
 
         for (const table of sourceTables) {
           if (this.tablesToSkip.includes(table)) {
             continue;
           }
 
-          const sourceSchema = await this.getTableSchema(sourceConn, db, table);
-          const targetSchema = await this.getTableSchema(targetConn, db, table);
+          const sourceSchema = await this.getTableSchema(
+            sourceConn,
+            sourceDb,
+            table
+          );
+          const targetSchema = await this.getTableSchema(
+            targetConn,
+            targetDb,
+            table
+          );
 
           // Convert to comparable format
           const sourceCols = sourceSchema.map((row) => [row.Field, row.Type]);
@@ -747,7 +765,7 @@ class StarRocksVerifier {
           if (schemaMatch) {
             this.verificationResults.push({
               check_type: "Schema Check",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: sourceCols.length,
               target: targetCols.length,
@@ -764,7 +782,7 @@ class StarRocksVerifier {
 
             this.verificationResults.push({
               check_type: "Schema Check",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: sourceCols.length,
               target: targetCols.length,
@@ -785,15 +803,15 @@ class StarRocksVerifier {
   async verifyChecksums() {
     console.log("Verifying checksums (this may take time for large tables)...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
 
         for (const table of sourceTables) {
           if (this.tablesToSkip.includes(table)) {
@@ -801,12 +819,12 @@ class StarRocksVerifier {
           }
 
           // Skip very large tables or use alternative methods
-          const rowCount = await this.getRowCount(sourceConn, db, table);
+          const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
           if (rowCount > 10000000) {
             // 10M+ rows
             this.verificationResults.push({
               check_type: "Table Checksum",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: "Skipped (large table)",
               target: "Skipped (large table)",
@@ -818,19 +836,19 @@ class StarRocksVerifier {
 
           const sourceChecksum = await this.computeChecksum(
             sourceConn,
-            db,
+            sourceDb,
             table
           );
           const targetChecksum = await this.computeChecksum(
             targetConn,
-            db,
+            targetDb,
             table
           );
 
           if (sourceChecksum === targetChecksum) {
             this.verificationResults.push({
               check_type: "Table Checksum",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: `${sourceChecksum.substring(0, 8)}...`,
               target: `${targetChecksum.substring(0, 8)}...`,
@@ -839,7 +857,7 @@ class StarRocksVerifier {
           } else {
             this.verificationResults.push({
               check_type: "Table Checksum",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: `${sourceChecksum.substring(0, 8)}...`,
               target: `${targetChecksum.substring(0, 8)}...`,
@@ -859,15 +877,15 @@ class StarRocksVerifier {
   async verifyColumnStatistics() {
     console.log("Verifying column statistics...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
 
         for (const table of sourceTables) {
           if (this.tablesToSkip.includes(table)) {
@@ -875,13 +893,17 @@ class StarRocksVerifier {
           }
 
           // Get column information
-          const columns = await this.getTableColumns(sourceConn, db, table);
+          const columns = await this.getTableColumns(
+            sourceConn,
+            sourceDb,
+            table
+          );
 
           // Skip tables with too many columns to avoid excessive checks
           if (columns.length > 50) {
             this.verificationResults.push({
               check_type: "Column Statistics",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: "Skipped",
               target: "Skipped",
@@ -892,7 +914,7 @@ class StarRocksVerifier {
           }
 
           // Find numeric columns
-          const schema = await this.getTableSchema(sourceConn, db, table);
+          const schema = await this.getTableSchema(sourceConn, sourceDb, table);
           const numericColumns = schema
             .filter((row) => /int|float|double|decimal|numeric/i.test(row.Type))
             .map((row) => row.Field);
@@ -911,13 +933,13 @@ class StarRocksVerifier {
           for (const column of sampleColumns) {
             const sourceStats = await this.getColumnStats(
               sourceConn,
-              db,
+              sourceDb,
               table,
               column
             );
             const targetStats = await this.getColumnStats(
               targetConn,
-              db,
+              targetDb,
               table,
               column
             );
@@ -954,7 +976,7 @@ class StarRocksVerifier {
             if (statsMatch) {
               this.verificationResults.push({
                 check_type: "Column Statistics",
-                database: db,
+                database: `${sourceDb} -> ${targetDb}`,
                 table: table,
                 column: column,
                 source: `MIN=${sourceStats[0]}, MAX=${sourceStats[1]}`,
@@ -964,7 +986,7 @@ class StarRocksVerifier {
             } else {
               this.verificationResults.push({
                 check_type: "Column Statistics",
-                database: db,
+                database: `${sourceDb} -> ${targetDb}`,
                 table: table,
                 column: column,
                 source: `MIN=${sourceStats[0]}, MAX=${sourceStats[1]}`,
@@ -986,15 +1008,15 @@ class StarRocksVerifier {
   async verifyDataSamples() {
     console.log("Verifying data samples...");
 
-    for (const db of this.databasesToVerify) {
-      const sourceConfig = { ...this.sourceConfig, database: db };
-      const targetConfig = { ...this.targetConfig, database: db };
+    for (const dbMapping of this.databasesToVerify) {
+      const sourceDb = dbMapping.source;
+      const targetDb = dbMapping.target;
 
       const sourceConn = await this.sourceConn;
       const targetConn = await this.targetConn;
 
       try {
-        const sourceTables = await this.getTables(sourceConn, db);
+        const sourceTables = await this.getTables(sourceConn, sourceDb);
 
         for (const table of sourceTables) {
           if (this.tablesToSkip.includes(table)) {
@@ -1002,11 +1024,11 @@ class StarRocksVerifier {
           }
 
           // Skip tables with too many rows for efficient sampling
-          const rowCount = await this.getRowCount(sourceConn, db, table);
+          const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
           if (rowCount === 0) {
             this.verificationResults.push({
               check_type: "Data Sampling",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: "Empty table",
               target: "Empty table",
@@ -1018,13 +1040,13 @@ class StarRocksVerifier {
 
           const sourceSample = await this.getDataSample(
             sourceConn,
-            db,
+            sourceDb,
             table,
             CONFIG.SAMPLE_SIZE
           );
           const targetSample = await this.getDataSample(
             targetConn,
-            db,
+            targetDb,
             table,
             CONFIG.SAMPLE_SIZE
           );
@@ -1033,12 +1055,12 @@ class StarRocksVerifier {
             this.compareDataSamples(
               sourceSample,
               targetSample,
-              await this.getTableSchema(sourceConn, db, table)
+              await this.getTableSchema(sourceConn, sourceDb, table)
             )
           ) {
             this.verificationResults.push({
               check_type: "Data Sampling",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: `${sourceSample.length} samples`,
               target: `${targetSample.length} samples`,
@@ -1047,7 +1069,7 @@ class StarRocksVerifier {
           } else {
             this.verificationResults.push({
               check_type: "Data Sampling",
-              database: db,
+              database: `${sourceDb} -> ${targetDb}`,
               table: table,
               source: `${sourceSample.length} samples`,
               target: `${targetSample.length} samples`,

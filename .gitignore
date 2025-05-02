@@ -1,3 +1,5 @@
 starrocks_migration_verification_*.md
 yarn.lock
 node_modules
+config.prod.json
+results/*.md

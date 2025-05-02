@@ -11,6 +11,11 @@
     "user": "root",
     "password": ""
   },
-  "databases": ["fins"],
+  "databases": [
+    {
+      "source": "fins",
+      "target": "fins"
+    }
+  ],
   "skipTables": []
 }
