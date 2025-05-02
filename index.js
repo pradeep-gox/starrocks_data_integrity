@@ -464,13 +464,14 @@ class StarRocksVerifier {
       .map((col) => `\`${col}\``)
       .join(", ");
 
+    // Create a more robust checksum query that handles NULLs and type conversions
     const query = `
       SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
       FROM (
         SELECT 
           ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
           MD5(CONCAT_WS('|', ${columns
-            .map((col) => `IFNULL(CAST(\`${col}\` AS STRING), 'NULL')`)
+            .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
             .join(", ")})) as row_hash
         FROM \`${table}\`
         ORDER BY ${orderByClause}
@@ -478,8 +479,15 @@ class StarRocksVerifier {
       ) t
     `;
 
-    const [rows] = await connection.query(query);
-    return rows[0].checksum || "N/A";
+    try {
+      const [rows] = await connection.query(query);
+      return rows[0].checksum || "N/A";
+    } catch (error) {
+      this.errors.push(
+        `Error computing checksum for ${database}.${table}: ${error.message}`
+      );
+      return "ERROR";
+    }
   }
 
   /**
@@ -529,13 +537,17 @@ class StarRocksVerifier {
     if (sourceVal === null && targetVal === null) return true;
     if (sourceVal === null || targetVal === null) return false;
 
+    // Convert both values to strings for comparison
+    const sourceStr = String(sourceVal).trim();
+    const targetStr = String(targetVal).trim();
+
     // Handle numeric types
     if (/int|float|double|decimal|numeric/i.test(columnType)) {
-      const sourceNum = parseFloat(sourceVal);
-      const targetNum = parseFloat(targetVal);
+      const sourceNum = parseFloat(sourceStr);
+      const targetNum = parseFloat(targetStr);
 
       if (isNaN(sourceNum) || isNaN(targetNum)) {
-        return sourceVal === targetVal;
+        return sourceStr === targetStr;
       }
 
       if (sourceNum === 0) {
@@ -548,8 +560,8 @@ class StarRocksVerifier {
 
     // Handle date/time types
     if (/date|time|timestamp/i.test(columnType)) {
-      const sourceDate = new Date(sourceVal);
-      const targetDate = new Date(targetVal);
+      const sourceDate = new Date(sourceStr);
+      const targetDate = new Date(targetStr);
       return (
         !isNaN(sourceDate.getTime()) &&
         !isNaN(targetDate.getTime()) &&
@@ -558,7 +570,7 @@ class StarRocksVerifier {
     }
 
     // Default to string comparison
-    return sourceVal === targetVal;
+    return sourceStr === targetStr;
   }
 
   /**
@@ -588,16 +600,20 @@ class StarRocksVerifier {
     // Sort both data sets by common columns
     const sortedSource = [...sourceSample].sort((a, b) => {
       for (const col of commonColumns) {
-        if (a[col] < b[col]) return -1;
-        if (a[col] > b[col]) return 1;
+        const aVal = String(a[col] || "").trim();
+        const bVal = String(b[col] || "").trim();
+        if (aVal < bVal) return -1;
+        if (aVal > bVal) return 1;
       }
       return 0;
     });
 
     const sortedTarget = [...targetSample].sort((a, b) => {
       for (const col of commonColumns) {
-        if (a[col] < b[col]) return -1;
-        if (a[col] > b[col]) return 1;
+        const aVal = String(a[col] || "").trim();
+        const bVal = String(b[col] || "").trim();
+        if (aVal < bVal) return -1;
+        if (aVal > bVal) return 1;
       }
       return 0;
     });
@@ -611,6 +627,12 @@ class StarRocksVerifier {
         const columnType =
           schema.find((field) => field.Field === col)?.Type || "string";
         if (!this.compareValues(sourceRow[col], targetRow[col], columnType)) {
+          // Log the difference for debugging
+          console.log(`Difference found in ${col}:`, {
+            source: sourceRow[col],
+            target: targetRow[col],
+            type: columnType,
+          });
           return false;
         }
       }
