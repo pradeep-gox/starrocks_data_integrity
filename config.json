@@ -17,5 +17,14 @@
       "target": "fins"
     }
   ],
-  "skipTables": []
+  "skipTables": [
+    "accounts_team_level_temporary",
+    "ad_images_team_level_temporary",
+    "ad_insights_conversion_report_time_with_unified_attribution_setting_team_level_temporary",
+    "ad_insights_conversion_report_time_without_unified_attribution_setting_team_level_temporary",
+    "ads_team_level_temporary",
+    "adsets_team_level_temporary",
+    "campaigns_team_level_temporary",
+    "creatives_team_level_temporary"
+  ]
 }

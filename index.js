@@ -237,7 +237,7 @@ class StarRocksVerifier {
   }
 
   /**
-   * Get a sample of data from the table
+   * Get a sample of data from the table with memory optimization
    */
   async getDataSample(connection, database, table, sampleSize = 100) {
     try {
@@ -264,38 +264,40 @@ class StarRocksVerifier {
         return [];
       }
 
-      // Create ORDER BY clause using only orderable columns
+      // For large tables, use a more efficient sampling method
+      if (rowCount > CONFIG.LARGE_TABLE_CHECKSUM_THRESHOLD) {
+        // Use a smaller sample size for large tables
+        const actualSampleSize = Math.min(10, sampleSize);
+        const step = Math.floor(rowCount / actualSampleSize);
+
+        // Create ORDER BY clause using only orderable columns
+        const orderByClause = orderableColumns
+          .map((col) => `\`${col}\``)
+          .join(", ");
+
+        // Use a more memory-efficient query with LIMIT and OFFSET
+        const query = `
+          SELECT * FROM \`${table}\`
+          ORDER BY ${orderByClause}
+          LIMIT ${actualSampleSize}
+          OFFSET ${step}
+        `;
+
+        const [rows] = await connection.query(query);
+        return rows;
+      }
+
+      // For smaller tables, use the original sampling method
       const orderByClause = orderableColumns
         .map((col) => `\`${col}\``)
         .join(", ");
+      const query = `
+        SELECT * FROM \`${table}\`
+        ORDER BY ${orderByClause}
+        LIMIT ${sampleSize}
+      `;
 
-      // Limit sample size based on table size
-      const actualSampleSize = Math.min(sampleSize, rowCount);
-
-      let query;
-      if (rowCount <= sampleSize) {
-        // If table is small, get all rows
-        query = `SELECT * FROM \`${table}\` ORDER BY ${orderByClause}`;
-      } else {
-        // Use deterministic sampling with fixed offset and sorting
-        const step = Math.floor(rowCount / actualSampleSize);
-        query = `SELECT * FROM \`${table}\` ORDER BY ${orderByClause} LIMIT ${actualSampleSize} OFFSET ${step}`;
-      }
-
-      // Execute query
       const [rows] = await connection.query(query);
-
-      // If we got more samples than requested, take a subset
-      if (rows.length > actualSampleSize) {
-        // Create a deterministic subset
-        const subset = [];
-        const step = Math.floor(rows.length / actualSampleSize);
-        for (let i = 0; i < actualSampleSize; i++) {
-          subset.push(rows[i * step]);
-        }
-        return subset;
-      }
-
       return rows;
     } catch (error) {
       this.errors.push(
@@ -358,6 +360,12 @@ class StarRocksVerifier {
         `No orderable columns found for ${database}.${table}, skipping checksum`
       );
       return "SKIPPED";
+    }
+
+    // Get row count first
+    const rowCount = await this.getRowCount(connection, database, table);
+    if (rowCount === 0) {
+      return "EMPTY";
     }
 
     // Use a deterministic sampling method
