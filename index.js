@@ -360,6 +360,11 @@ class StarRocksVerifier {
       return "EMPTY";
     }
 
+    // Create ORDER BY clause using only orderable columns
+    const orderByClause = orderableColumns
+      .map((col) => `\`${col}\``)
+      .join(", ");
+
     // For very large tables, use a smaller sample size
     const sampleSize = rowCount > 10000000 ? 100000 : 1000000;
     const sampleInterval = Math.max(1, Math.floor(rowCount / sampleSize));
