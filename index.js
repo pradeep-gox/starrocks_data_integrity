@@ -360,10 +360,9 @@ class StarRocksVerifier {
       return "EMPTY";
     }
 
-    // Create ORDER BY clause using only orderable columns
-    const orderByClause = orderableColumns
-      .map((col) => `\`${col}\``)
-      .join(", ");
+    // For very large tables, use a smaller sample size
+    const sampleSize = rowCount > 10000000 ? 100000 : 1000000;
+    const sampleInterval = Math.max(1, Math.floor(rowCount / sampleSize));
 
     // Use a simple sampling method with fixed intervals and consistent ordering
     const query = `
@@ -382,7 +381,7 @@ class StarRocksVerifier {
             .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
             .join(", ")})) as row_hash
         FROM ordered_rows
-        WHERE MOD(row_num, GREATEST(1, FLOOR(${rowCount} / 1000))) = 0
+        WHERE MOD(row_num, ${sampleInterval}) = 0
       ) t
     `;
 
@@ -745,21 +744,10 @@ class StarRocksVerifier {
             continue;
           }
 
-          // Skip very large tables or use alternative methods
           const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
-          if (rowCount > 10000000) {
-            // 10M+ rows
-            this.verificationResults.push({
-              check_type: "Table Checksum",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: "Skipped (large table)",
-              target: "Skipped (large table)",
-              result: "SKIPPED",
-              notes: `Table too large (${rowCount} rows), skipping full checksum`,
-            });
-            continue;
-          }
+          console.log(
+            `Computing checksum for ${sourceDb}.${table} (${rowCount} rows)`
+          );
 
           const sourceChecksum = await this.computeChecksum(
             sourceConn,
@@ -827,18 +815,18 @@ class StarRocksVerifier {
           );
 
           // Skip tables with too many columns to avoid excessive checks
-          if (columns.length > 50) {
-            this.verificationResults.push({
-              check_type: "Column Statistics",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: "Skipped",
-              target: "Skipped",
-              result: "SKIPPED",
-              notes: `Too many columns (${columns.length})`,
-            });
-            continue;
-          }
+          // if (columns.length > 50) {
+          //   this.verificationResults.push({
+          //     check_type: "Column Statistics",
+          //     database: `${sourceDb} -> ${targetDb}`,
+          //     table: table,
+          //     source: "Skipped",
+          //     target: "Skipped",
+          //     result: "SKIPPED",
+          //     notes: `Too many columns (${columns.length})`,
+          //   });
+          //   continue;
+          // }
 
           // Find numeric columns
           const schema = await this.getTableSchema(sourceConn, sourceDb, table);
