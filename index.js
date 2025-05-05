@@ -179,7 +179,10 @@ class StarRocksVerifier {
     const [rows] = await connection.query("SHOW DATABASES");
     return rows
       .map((row) => Object.values(row)[0])
-      .filter((name) => !["information_schema", "mysql"].includes(name));
+      .filter(
+        (name) =>
+          !["information_schema", "mysql", "sys", "_statistics_"].includes(name)
+      );
   }
 
   /**
@@ -758,20 +761,20 @@ class StarRocksVerifier {
           }
 
           // Skip very large tables or use alternative methods
-          const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
-          if (rowCount > 10000000) {
-            // 10M+ rows
-            this.verificationResults.push({
-              check_type: "Table Checksum",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: "Skipped (large table)",
-              target: "Skipped (large table)",
-              result: "SKIPPED",
-              notes: `Table too large (${rowCount} rows), skipping full checksum`,
-            });
-            continue;
-          }
+          // const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
+          // if (rowCount > 10000000) {
+          //   // 10M+ rows
+          //   this.verificationResults.push({
+          //     check_type: "Table Checksum",
+          //     database: `${sourceDb} -> ${targetDb}`,
+          //     table: table,
+          //     source: "Skipped (large table)",
+          //     target: "Skipped (large table)",
+          //     result: "SKIPPED",
+          //     notes: `Table too large (${rowCount} rows), skipping full checksum`,
+          //   });
+          //   continue;
+          // }
 
           const sourceChecksum = await this.computeChecksum(
             sourceConn,
