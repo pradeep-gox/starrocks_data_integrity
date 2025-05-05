@@ -343,53 +343,54 @@ class StarRocksVerifier {
    * Compute checksum for a large table using sampling
    */
   async computeSampledChecksum(connection, database, table, columns) {
-    // Get orderable columns
-    const orderableColumns = await this.getOrderableColumns(
-      connection,
-      database,
-      table
-    );
-
-    if (orderableColumns.length === 0) {
-      this.errors.push(
-        `No orderable columns found for ${database}.${table}, skipping checksum`
-      );
-      return "SKIPPED";
-    }
-
-    // Get row count first
-    const rowCount = await this.getRowCount(connection, database, table);
-    if (rowCount === 0) {
-      return "EMPTY";
-    }
-
-    // Create ORDER BY clause using only orderable columns
-    const orderByClause = orderableColumns
-      .map((col) => `\`${col}\``)
-      .join(", ");
-
-    // Use a simple sampling method with fixed intervals and consistent ordering
-    const query = `
-      WITH ordered_rows AS (
-        SELECT 
-          ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
-          ${columns.map((col) => `\`${col}\``).join(", ")}
-        FROM \`${table}\`
-        ORDER BY ${orderByClause}
-      )
-      SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
-      FROM (
-        SELECT 
-          row_num,
-          MD5(CONCAT_WS('|', ${columns
-            .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
-            .join(", ")})) as row_hash
-        FROM ordered_rows
-        WHERE MOD(row_num, GREATEST(1, FLOOR(${rowCount} / 1000))) = 0
-      ) t
-    `;
-
     try {
+      // First check if team_cache_id column exists
+      const schema = await this.getTableSchema(connection, database, table);
+      const hasTeamCacheId = schema.some(
+        (col) => col.Field === "team_cache_id"
+      );
+
+      if (!hasTeamCacheId) {
+        this.errors.push(
+          `team_cache_id column not found in ${database}.${table}, skipping checksum`
+        );
+        return "SKIPPED";
+      }
+
+      // Get a random team_cache_id from the table
+      const randomTeamQuery = `
+        SELECT team_cache_id 
+        FROM \`${table}\` 
+        WHERE team_cache_id IS NOT NULL 
+        ORDER BY RAND() 
+        LIMIT 1
+      `;
+
+      const [teamRows] = await connection.query(randomTeamQuery);
+
+      if (!teamRows || teamRows.length === 0) {
+        this.errors.push(
+          `No non-null team_cache_id values found in ${database}.${table}, skipping checksum`
+        );
+        return "SKIPPED";
+      }
+
+      const randomTeamId = teamRows[0].team_cache_id;
+
+      // Use the random team_cache_id to sample data
+      const query = `
+        SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
+        FROM (
+          SELECT 
+            ROW_NUMBER() OVER () as row_num,
+            MD5(CONCAT_WS('|', ${columns
+              .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
+              .join(", ")})) as row_hash
+          FROM \`${table}\`
+          WHERE team_cache_id = ${randomTeamId}
+        ) t
+      `;
+
       const [rows] = await connection.query(query);
       return rows[0].checksum || "N/A";
     } catch (error) {
