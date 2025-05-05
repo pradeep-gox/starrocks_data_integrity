@@ -493,6 +493,12 @@ class StarRocksVerifier {
       const sourceDbs = await this.getDatabases(sourceConn);
       const targetDbs = await this.getDatabases(targetConn);
 
+      console.log("Source databases:");
+      console.log(sourceDbs);
+
+      console.log("Target databases:");
+      console.log(targetDbs);
+
       for (const dbMapping of this.databasesToVerify) {
         const sourceDb = dbMapping.source;
         const targetDb = dbMapping.target;
@@ -547,6 +553,12 @@ class StarRocksVerifier {
       try {
         const sourceTables = await this.getTables(sourceConn, sourceDb);
         const targetTables = await this.getTables(targetConn, targetDb);
+
+        console.log("Source tables:");
+        console.log(sourceTables);
+
+        console.log("Target tables:");
+        console.log(targetTables);
 
         // Check if all source tables exist in target
         for (const table of sourceTables) {
@@ -827,18 +839,18 @@ class StarRocksVerifier {
           );
 
           // Skip tables with too many columns to avoid excessive checks
-          if (columns.length > 50) {
-            this.verificationResults.push({
-              check_type: "Column Statistics",
-              database: `${sourceDb} -> ${targetDb}`,
-              table: table,
-              source: "Skipped",
-              target: "Skipped",
-              result: "SKIPPED",
-              notes: `Too many columns (${columns.length})`,
-            });
-            continue;
-          }
+          // if (columns.length > 50) {
+          //   this.verificationResults.push({
+          //     check_type: "Column Statistics",
+          //     database: `${sourceDb} -> ${targetDb}`,
+          //     table: table,
+          //     source: "Skipped",
+          //     target: "Skipped",
+          //     result: "SKIPPED",
+          //     notes: `Too many columns (${columns.length})`,
+          //   });
+          //   continue;
+          // }
 
           // Find numeric columns
           const schema = await this.getTableSchema(sourceConn, sourceDb, table);
