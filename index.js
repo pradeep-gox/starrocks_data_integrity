@@ -394,7 +394,7 @@ class StarRocksVerifier {
         ORDER BY ${orderByClause}
         LIMIT 5
       `;
-      const [verifyRows] = await connectionu.query(verifyQuery);
+      const [verifyRows] = await connection.query(verifyQuery);
       console.log(
         `Sample data for ${database}.${table} (team_cache_id=${selectedTeamId}):`,
         verifyRows.map((row) =>
