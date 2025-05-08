@@ -316,7 +316,7 @@ class StarRocksVerifier {
   /**
    * Calculate checksum for a table using a more robust method
    */
-  async computeChecksum(connection, database, table) {
+  async computeChecksum(connection, database, table, selectedTeamId) {
     try {
       await connection.query(`USE \`${database}\``);
       const columns = await this.getTableColumns(connection, database, table);
@@ -331,7 +331,8 @@ class StarRocksVerifier {
           connection,
           database,
           table,
-          columns
+          columns,
+          selectedTeamId
         );
       }
 
@@ -353,30 +354,15 @@ class StarRocksVerifier {
   /**
    * Compute checksum for a large table using sampling
    */
-  async computeSampledChecksum(connection, database, table, columns) {
+  async computeSampledChecksum(
+    connection,
+    database,
+    table,
+    columns,
+    selectedTeamId
+  ) {
     try {
-      // Get distinct team_cache_ids from source table
-      const distinctTeamIdsQuery = `
-        SELECT DISTINCT team_cache_id 
-        FROM \`${table}\` 
-        WHERE team_cache_id IS NOT NULL 
-        ORDER BY team_cache_id
-      `;
-
-      const [teamIds] = await connection.query(distinctTeamIdsQuery);
-
-      if (!teamIds || teamIds.length === 0) {
-        this.errors.push(
-          `No non-null team_cache_id values found in ${database}.${table}, skipping checksum`
-        );
-        return "SKIPPED";
-      }
-
-      // Select a random team_cache_id
-      const randomIndex = Math.floor(Math.random() * teamIds.length);
-      const selectedTeamId = teamIds[randomIndex].team_cache_id;
-
-      // Use the selected team_cache_id to sample data
+      // Use the provided team_cache_id to sample data
       const query = `
         SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
         FROM (
@@ -760,31 +746,48 @@ class StarRocksVerifier {
             continue;
           }
 
-          // Skip very large tables or use alternative methods
-          // const rowCount = await this.getRowCount(sourceConn, sourceDb, table);
-          // if (rowCount > 10000000) {
-          //   // 10M+ rows
-          //   this.verificationResults.push({
-          //     check_type: "Table Checksum",
-          //     database: `${sourceDb} -> ${targetDb}`,
-          //     table: table,
-          //     source: "Skipped (large table)",
-          //     target: "Skipped (large table)",
-          //     result: "SKIPPED",
-          //     notes: `Table too large (${rowCount} rows), skipping full checksum`,
-          //   });
-          //   continue;
-          // }
+          // Get distinct team_cache_ids from source table
+          const distinctTeamIdsQuery = `
+            SELECT DISTINCT team_cache_id 
+            FROM \`${sourceDb}\`.\`${table}\` 
+            WHERE team_cache_id IS NOT NULL 
+            ORDER BY team_cache_id
+          `;
 
+          const [teamIds] = await sourceConn.query(distinctTeamIdsQuery);
+
+          if (!teamIds || teamIds.length === 0) {
+            this.verificationResults.push({
+              check_type: "Table Checksum",
+              database: `${sourceDb} -> ${targetDb}`,
+              table: table,
+              source: "No team_cache_id found",
+              target: "N/A",
+              result: "SKIPPED",
+              notes: "No team_cache_id values found in table",
+            });
+            continue;
+          }
+
+          // Select a random team_cache_id
+          const randomIndex = Math.floor(Math.random() * teamIds.length);
+          const selectedTeamId = teamIds[randomIndex].team_cache_id;
+          console.log(
+            `Selected team_cache_id ${selectedTeamId} for ${sourceDb}.${table}`
+          );
+
+          // Compute checksums using the same team_cache_id
           const sourceChecksum = await this.computeChecksum(
             sourceConn,
             sourceDb,
-            table
+            table,
+            selectedTeamId
           );
           const targetChecksum = await this.computeChecksum(
             targetConn,
             targetDb,
-            table
+            table,
+            selectedTeamId
           );
 
           if (sourceChecksum === targetChecksum) {
@@ -795,6 +798,7 @@ class StarRocksVerifier {
               source: `${sourceChecksum.substring(0, 8)}...`,
               target: `${targetChecksum.substring(0, 8)}...`,
               result: "PASSED",
+              notes: `team_cache_id: ${selectedTeamId}`,
             });
           } else {
             this.verificationResults.push({
@@ -804,6 +808,7 @@ class StarRocksVerifier {
               source: `${sourceChecksum.substring(0, 8)}...`,
               target: `${targetChecksum.substring(0, 8)}...`,
               result: "FAILED",
+              notes: `team_cache_id: ${selectedTeamId}`,
             });
           }
         }
