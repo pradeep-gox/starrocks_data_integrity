@@ -380,21 +380,15 @@ class StarRocksVerifier {
 
       // Use the provided team_cache_id to sample data
       const query = `
-        WITH ordered_rows AS (
-          SELECT 
-            ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
-            ${columns.map((col) => `\`${col}\``).join(", ")}
-          FROM \`${table}\`
-          WHERE team_cache_id = ${selectedTeamId}
-        )
         SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
         FROM (
           SELECT 
-            row_num,
+            ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
             MD5(CONCAT_WS('|', ${columns
               .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
               .join(", ")})) as row_hash
-          FROM ordered_rows
+          FROM \`${table}\`
+          WHERE team_cache_id = ${selectedTeamId}
         ) t
       `;
 
