@@ -362,12 +362,31 @@ class StarRocksVerifier {
     selectedTeamId
   ) {
     try {
+      // Get orderable columns for consistent ordering
+      const orderableColumns = await this.getOrderableColumns(
+        connection,
+        database,
+        table
+      );
+
+      if (orderableColumns.length === 0) {
+        this.errors.push(
+          `No orderable columns found for ${database}.${table}, skipping checksum`
+        );
+        return "SKIPPED";
+      }
+
+      // Create ORDER BY clause using orderable columns
+      const orderByClause = orderableColumns
+        .map((col) => `\`${col}\``)
+        .join(", ");
+
       // Use the provided team_cache_id to sample data
       const query = `
         SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
         FROM (
           SELECT 
-            ROW_NUMBER() OVER (ORDER BY team_cache_id) as row_num,
+            ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
             MD5(CONCAT_WS('|', ${columns
               .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
               .join(", ")})) as row_hash
@@ -838,27 +857,6 @@ class StarRocksVerifier {
           if (this.tablesToSkip.includes(table)) {
             continue;
           }
-
-          // Get column information
-          const columns = await this.getTableColumns(
-            sourceConn,
-            sourceDb,
-            table
-          );
-
-          // Skip tables with too many columns to avoid excessive checks
-          // if (columns.length > 50) {
-          //   this.verificationResults.push({
-          //     check_type: "Column Statistics",
-          //     database: `${sourceDb} -> ${targetDb}`,
-          //     table: table,
-          //     source: "Skipped",
-          //     target: "Skipped",
-          //     result: "SKIPPED",
-          //     notes: `Too many columns (${columns.length})`,
-          //   });
-          //   continue;
-          // }
 
           // Find numeric columns
           const schema = await this.getTableSchema(sourceConn, sourceDb, table);
