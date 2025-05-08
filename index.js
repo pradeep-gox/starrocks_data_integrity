@@ -324,9 +324,6 @@ class StarRocksVerifier {
 
       // For large tables, use a more efficient sampling method
       if (rowCount > CONFIG.LARGE_TABLE_CHECKSUM_THRESHOLD) {
-        console.log(
-          `Using sampling for large table ${database}.${table} (${rowCount} rows)`
-        );
         return await this.computeSampledChecksum(
           connection,
           database,
@@ -376,33 +373,10 @@ class StarRocksVerifier {
         return "SKIPPED";
       }
 
-      console.log(
-        `Orderable columns for ${database}.${table}:`,
-        orderableColumns
-      );
-
       // Create ORDER BY clause using orderable columns
       const orderByClause = orderableColumns
         .map((col) => `\`${col}\``)
         .join(", ");
-
-      // First verify data consistency with a simple query
-      const verifyQuery = `
-        SELECT ${orderableColumns.map((col) => `\`${col}\``).join(", ")}
-        FROM \`${table}\`
-        WHERE team_cache_id = ${selectedTeamId}
-        ORDER BY ${orderByClause}
-        LIMIT 5
-      `;
-      const [verifyRows] = await connection.query(verifyQuery);
-      console.log(
-        `Sample data for ${database}.${table} (team_cache_id=${selectedTeamId}):`,
-        verifyRows.map((row) =>
-          Object.entries(row)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(", ")
-        )
-      );
 
       // Use the provided team_cache_id to sample data
       const query = `
@@ -424,11 +398,8 @@ class StarRocksVerifier {
         ) t
       `;
 
-      console.log(`Executing checksum query for ${database}.${table}:`, query);
-
       const [rows] = await connection.query(query);
       const checksum = rows[0].checksum || "N/A";
-      console.log(`Checksum result for ${database}.${table}:`, checksum);
       return checksum;
     } catch (error) {
       this.errors.push(
@@ -824,9 +795,6 @@ class StarRocksVerifier {
           // Select a random team_cache_id
           const randomIndex = Math.floor(Math.random() * teamIds.length);
           const selectedTeamId = teamIds[randomIndex].team_cache_id;
-          console.log(
-            `Selected team_cache_id ${selectedTeamId} for ${sourceDb}.${table}`
-          );
 
           // Compute checksums using the same team_cache_id
           const sourceChecksum = await this.computeChecksum(
