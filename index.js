@@ -376,27 +376,60 @@ class StarRocksVerifier {
         return "SKIPPED";
       }
 
+      console.log(
+        `Orderable columns for ${database}.${table}:`,
+        orderableColumns
+      );
+
       // Create ORDER BY clause using orderable columns
       const orderByClause = orderableColumns
         .map((col) => `\`${col}\``)
         .join(", ");
 
+      // First verify data consistency with a simple query
+      const verifyQuery = `
+        SELECT ${orderableColumns.map((col) => `\`${col}\``).join(", ")}
+        FROM \`${table}\`
+        WHERE team_cache_id = ${selectedTeamId}
+        ORDER BY ${orderByClause}
+        LIMIT 5
+      `;
+      const [verifyRows] = await connectionu.query(verifyQuery);
+      console.log(
+        `Sample data for ${database}.${table} (team_cache_id=${selectedTeamId}):`,
+        verifyRows.map((row) =>
+          Object.entries(row)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ")
+        )
+      );
+
       // Use the provided team_cache_id to sample data
       const query = `
+        WITH ordered_rows AS (
+          SELECT 
+            ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+            ${columns.map((col) => `\`${col}\``).join(", ")}
+          FROM \`${table}\`
+          WHERE team_cache_id = ${selectedTeamId}
+        )
         SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
         FROM (
           SELECT 
-            ROW_NUMBER() OVER (ORDER BY ${orderByClause}) as row_num,
+            row_num,
             MD5(CONCAT_WS('|', ${columns
               .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
               .join(", ")})) as row_hash
-          FROM \`${table}\`
-          WHERE team_cache_id = ${selectedTeamId}
+          FROM ordered_rows
         ) t
       `;
 
+      console.log(`Executing checksum query for ${database}.${table}:`, query);
+
       const [rows] = await connection.query(query);
-      return rows[0].checksum || "N/A";
+      const checksum = rows[0].checksum || "N/A";
+      console.log(`Checksum result for ${database}.${table}:`, checksum);
+      return checksum;
     } catch (error) {
       this.errors.push(
         `Error computing checksum for ${database}.${table}: ${error.message}`
