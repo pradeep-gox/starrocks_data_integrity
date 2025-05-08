@@ -195,7 +195,16 @@ class StarRocksVerifier {
       .map((row) => Object.values(row)[0])
       .filter((name) => !this.tablesToSkip.includes(name))
       .filter((name) => !name.includes("temporary"))
-      .filter((name) => !name.includes("from_hetzner"));
+      .filter((name) => !name.includes("from_hetzner"))
+      .filter((name) => !name.includes("to_hetzner"))
+      .filter((name) => !name.includes("from_aws"))
+      .filter((name) => !name.includes("to_aws"))
+      .filter((name) => !name.includes("_backup"))
+      .filter((name) => !name.includes("backup_"))
+      .filter((name) => !name.includes("_temp"))
+      .filter((name) => !name.includes("temp_"))
+      .filter((name) => !name.includes("incremental_sync_states_"))
+      .filter((name) => !name.includes("states_"));
   }
 
   /**
