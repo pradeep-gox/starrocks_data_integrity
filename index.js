@@ -355,50 +355,38 @@ class StarRocksVerifier {
    */
   async computeSampledChecksum(connection, database, table, columns) {
     try {
-      // First check if team_cache_id column exists
-      const schema = await this.getTableSchema(connection, database, table);
-      const hasTeamCacheId = schema.some(
-        (col) => col.Field === "team_cache_id"
-      );
-
-      if (!hasTeamCacheId) {
-        this.errors.push(
-          `team_cache_id column not found in ${database}.${table}, skipping checksum`
-        );
-        return "SKIPPED";
-      }
-
-      // Get a random team_cache_id from the table
-      const randomTeamQuery = `
-        SELECT team_cache_id 
+      // Get distinct team_cache_ids from source table
+      const distinctTeamIdsQuery = `
+        SELECT DISTINCT team_cache_id 
         FROM \`${table}\` 
         WHERE team_cache_id IS NOT NULL 
-        ORDER BY RAND() 
-        LIMIT 1
+        ORDER BY team_cache_id
       `;
 
-      const [teamRows] = await connection.query(randomTeamQuery);
+      const [teamIds] = await connection.query(distinctTeamIdsQuery);
 
-      if (!teamRows || teamRows.length === 0) {
+      if (!teamIds || teamIds.length === 0) {
         this.errors.push(
           `No non-null team_cache_id values found in ${database}.${table}, skipping checksum`
         );
         return "SKIPPED";
       }
 
-      const randomTeamId = teamRows[0].team_cache_id;
+      // Select a random team_cache_id
+      const randomIndex = Math.floor(Math.random() * teamIds.length);
+      const selectedTeamId = teamIds[randomIndex].team_cache_id;
 
-      // Use the random team_cache_id to sample data
+      // Use the selected team_cache_id to sample data
       const query = `
         SELECT MD5(GROUP_CONCAT(row_hash ORDER BY row_num)) as checksum
         FROM (
           SELECT 
-            ROW_NUMBER() OVER () as row_num,
+            ROW_NUMBER() OVER (ORDER BY team_cache_id) as row_num,
             MD5(CONCAT_WS('|', ${columns
               .map((col) => `COALESCE(CAST(\`${col}\` AS STRING), 'NULL')`)
               .join(", ")})) as row_hash
           FROM \`${table}\`
-          WHERE team_cache_id = ${randomTeamId}
+          WHERE team_cache_id = ${selectedTeamId}
         ) t
       `;
 
