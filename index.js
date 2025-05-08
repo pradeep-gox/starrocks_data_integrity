@@ -194,7 +194,8 @@ class StarRocksVerifier {
     return rows
       .map((row) => Object.values(row)[0])
       .filter((name) => !this.tablesToSkip.includes(name))
-      .filter((name) => !name.includes("temporary"));
+      .filter((name) => !name.includes("temporary"))
+      .filter((name) => !name.includes("from_hetzner"));
   }
 
   /**
