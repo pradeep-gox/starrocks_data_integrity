@@ -193,7 +193,8 @@ class StarRocksVerifier {
     const [rows] = await connection.query("SHOW TABLES");
     return rows
       .map((row) => Object.values(row)[0])
-      .filter((name) => !this.tablesToSkip.includes(name));
+      .filter((name) => !this.tablesToSkip.includes(name))
+      .filter((name) => !name.includes("temporary"));
   }
 
   /**
