@@ -1,5 +1,4 @@
-starrocks_migration_verification_*.md
-yarn.lock
 node_modules
+pnpm-debug.log*
 config.prod.json
 results/*.md
